@@ -1,5 +1,5 @@
 /**
- * UE5 MCP Server - Dynamic Context Loader
+ * UnrealClaude Dynamic Context Loader
  *
  * Loads UE 5.7 context files based on:
  * 1. Tool names (automatic injection)
@@ -22,7 +22,9 @@ const CONTEXTS_DIR = join(__dirname, "contexts");
 const CONTEXT_CONFIG = {
   animation: {
     files: ["animation.md"],
+    // Tool name patterns that trigger this context
     toolPatterns: [/^anim/, /animation/, /state_machine/],
+    // Keywords in user queries that trigger this context
     keywords: [
       "animation",
       "anim",
@@ -67,7 +69,7 @@ const CONTEXT_CONFIG = {
   },
   actor: {
     files: ["actor.md"],
-    toolPatterns: [/spawn/, /actor/, /move/, /delete/, /level/],
+    toolPatterns: [/spawn/, /actor/, /move/, /delete/, /level/, /open_level/],
     keywords: [
       "actor",
       "spawn",
@@ -78,6 +80,13 @@ const CONTEXT_CONFIG = {
       "attach",
       "destroy",
       "iterate",
+      "level",
+      "map",
+      "open level",
+      "new level",
+      "load map",
+      "switch level",
+      "template map",
     ],
   },
   assets: {
@@ -242,7 +251,7 @@ export function getCategoriesFromQuery(query) {
         if (!matches.includes(category)) {
           matches.push(category);
         }
-        break;
+        break; // One match per category is enough
       }
     }
   }

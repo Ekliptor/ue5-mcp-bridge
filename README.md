@@ -122,6 +122,7 @@ Once connected, you can interact with Unreal Editor through natural language:
 
 | Tool | Description |
 |------|-------------|
+| `unreal_open_level` | Open, create, or list level maps in the editor |
 | `unreal_spawn_actor` | Spawn actors in the level |
 | `unreal_get_level_actors` | List actors in the current level |
 | `unreal_set_property` | Set properties on actors |
@@ -129,6 +130,14 @@ Once connected, you can interact with Unreal Editor through natural language:
 | `unreal_delete_actors` | Delete actors from the level |
 | `unreal_run_console_command` | Run Unreal console commands |
 | `unreal_get_output_log` | Get recent output log entries |
+
+### Asset Tools
+
+| Tool | Description |
+|------|-------------|
+| `unreal_asset_search` | Search for assets by class, path, or name |
+| `unreal_asset_dependencies` | Get all assets that a specific asset depends on |
+| `unreal_asset_referencers` | Get all assets that reference a specific asset |
 
 ### Script Execution
 
@@ -156,6 +165,35 @@ Once connected, you can interact with Unreal Editor through natural language:
 | Tool | Description |
 |------|-------------|
 | `unreal_anim_blueprint_modify` | Full Animation Blueprint manipulation |
+
+### Character Tools
+
+| Tool | Description |
+|------|-------------|
+| `unreal_character` | Query and modify ACharacter actors in the current level |
+| `unreal_character_data` | Create and manage character configuration DataAssets and stats DataTables |
+
+### Material Tools
+
+| Tool | Description |
+|------|-------------|
+| `unreal_material` | Material instance creation and assignment for Skeletal Meshes |
+
+### Enhanced Input Tools
+
+| Tool | Description |
+|------|-------------|
+| `unreal_enhanced_input` | Create and modify Enhanced Input assets (InputAction, InputMappingContext) |
+
+### Async Task Queue
+
+| Tool | Description |
+|------|-------------|
+| `unreal_task_submit` | Submit an MCP tool for async background execution |
+| `unreal_task_status` | Check status of a submitted async task |
+| `unreal_task_result` | Get the result of a completed async task |
+| `unreal_task_list` | List all async tasks |
+| `unreal_task_cancel` | Cancel a running async task |
 
 ---
 
