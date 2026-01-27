@@ -1,5 +1,7 @@
 # UE5 MCP Server
 
+[![Tests](https://img.shields.io/badge/tests-87%20passed-brightgreen)](tests/) [![Coverage](https://img.shields.io/badge/coverage-97%25-brightgreen)](vitest.config.js) [![Node](https://img.shields.io/badge/node-%3E%3D18-blue)](package.json) [![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](LICENSE)
+
 An MCP (Model Context Protocol) server that bridges AI assistants to Unreal Engine 5's editor, enabling direct manipulation of levels, actors, Blueprints, and Animation Blueprints.
 
 ## Why a Standalone Repository?
@@ -325,6 +327,19 @@ Enable automatic context injection by setting:
 - Ensure Node.js 18+ is installed and in PATH
 - Run `npm install` to ensure dependencies are present
 - Verify the path in your MCP client config points to the correct `index.js`
+
+### Running the Test Suite
+
+This repo includes a Vitest test suite (87 tests) that validates bridge behavior without a running Unreal Editor:
+
+```bash
+npm install
+npm test              # run all tests
+npm run test:watch    # watch mode
+npm run test:coverage # with coverage report
+```
+
+Tests mock the Unreal HTTP server and cover schema conversion, HTTP client logic, context loading, tool listing, and call routing.
 
 ---
 
