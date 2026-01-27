@@ -1,0 +1,316 @@
+/**
+ * Integration tests for the CallTool handler logic.
+ *
+ * These tests compose the extracted lib functions with the context-loader
+ * to replicate the CallTool handler behavior from index.js.
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import {
+  executeUnrealTool,
+  checkUnrealConnection,
+  fetchUnrealTools,
+} from "../../lib.js";
+import {
+  installFetchMock,
+  installFetchReject,
+} from "../helpers/mock-fetch.js";
+import {
+  UNREAL_STATUS_RESPONSE,
+  UNREAL_TOOLS_RESPONSE,
+  TOOL_EXECUTE_SUCCESS,
+  TOOL_EXECUTE_FAILURE,
+} from "../helpers/fixtures.js";
+
+// Mock fs so context-loader works without disk
+vi.mock("fs", () => ({
+  readFileSync: vi.fn((filepath) => {
+    const filename = filepath.replace(/\\/g, "/").split("/").pop();
+    const stubs = {
+      "animation.md": "# Animation Context\nAnimation content.",
+      "blueprint.md": "# Blueprint Context\nBlueprint content.",
+      "slate.md": "# Slate Context",
+      "actor.md": "# Actor Context",
+      "assets.md": "# Assets Context",
+      "replication.md": "# Replication Context",
+      "enhanced_input.md": "# Enhanced Input Context",
+      "character.md": "# Character Context",
+      "material.md": "# Material Context",
+    };
+    if (stubs[filename]) return stubs[filename];
+    throw new Error(`ENOENT: ${filepath}`);
+  }),
+  existsSync: vi.fn(() => true),
+}));
+
+import {
+  getContextForTool,
+  getContextForQuery,
+  listCategories,
+  getCategoryInfo,
+  loadContextForCategory,
+  clearCache,
+} from "../../context-loader.js";
+
+const BASE_URL = "http://localhost:3000";
+const TIMEOUT_MS = 5000;
+
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  clearCache();
+});
+
+/**
+ * Replicate the CallTool handler logic from index.js
+ */
+async function simulateCallTool(name, args, injectContext = false) {
+  // Handle UE context request
+  if (name === "unreal_get_ue_context") {
+    const { category, query } = args || {};
+
+    let result = null;
+    let matchedCategories = [];
+
+    if (category) {
+      const content = loadContextForCategory(category);
+      if (content) {
+        result = content;
+        matchedCategories = [category];
+      } else {
+        return {
+          content: [{ type: "text", text: `Unknown category: ${category}. Available categories: ${listCategories().join(", ")}` }],
+          isError: true,
+        };
+      }
+    } else if (query) {
+      const queryResult = getContextForQuery(query);
+      if (queryResult) {
+        result = queryResult.content;
+        matchedCategories = queryResult.categories;
+      } else {
+        return {
+          content: [{ type: "text", text: `No context found for query: "${query}". Try categories: ${listCategories().join(", ")}` }],
+          isError: false,
+        };
+      }
+    } else {
+      const categoryList = listCategories().map((cat) => {
+        const info = getCategoryInfo(cat);
+        return `- **${cat}**: Keywords: ${info.keywords.slice(0, 5).join(", ")}...`;
+      });
+      return {
+        content: [{ type: "text", text: `# Available UE 5.7 Context Categories\n\n${categoryList.join("\n")}\n\nUse \`category\` param for specific context or \`query\` to search by keywords.` }],
+      };
+    }
+
+    return {
+      content: [{ type: "text", text: `# UE 5.7 Context: ${matchedCategories.join(", ")}\n\n${result}` }],
+    };
+  }
+
+  // Handle status check
+  if (name === "unreal_status") {
+    const status = await checkUnrealConnection(BASE_URL, TIMEOUT_MS);
+    if (status.connected) {
+      const unrealTools = await fetchUnrealTools(BASE_URL, TIMEOUT_MS);
+      const categories = {};
+      const brokenTools = [];
+      for (const tool of unrealTools) {
+        let category = "utility";
+        if (tool.name.startsWith("blueprint_")) category = "blueprint";
+        else if (tool.name.startsWith("anim_blueprint")) category = "animation";
+        else if (tool.name.startsWith("asset_")) category = "asset";
+        else if (tool.name.startsWith("task_")) category = "task_queue";
+        else if (tool.name.includes("actor") || tool.name.includes("spawn") || tool.name.includes("move") || tool.name.includes("level")) category = "actor";
+        categories[category] = (categories[category] || 0) + 1;
+        if (!tool.description || tool.description.length < 5) {
+          brokenTools.push({ name: tool.name, issue: "missing description" });
+        }
+      }
+
+      const contextCategories = listCategories();
+      const testContext = loadContextForCategory("animation");
+      const contextStatus = testContext
+        ? `OK (${contextCategories.length} categories: ${contextCategories.join(", ")})`
+        : "FAILED - context files not loading";
+
+      const response = {
+        connected: true,
+        project: status.projectName,
+        engine: status.engineVersion,
+        context_system: contextStatus,
+        tool_summary: categories,
+        total_tools: unrealTools.length,
+        message: "Unreal Editor connected. All tools operational.",
+      };
+      if (brokenTools.length > 0) {
+        response.broken_tools = brokenTools;
+        response.message = `Unreal Editor connected. ${brokenTools.length} tool(s) have issues.`;
+      }
+      return {
+        content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
+      };
+    } else {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ connected: false, reason: status.reason, message: "Unreal Editor is not running or the plugin is not enabled. Please start Unreal Editor with the plugin." }, null, 2) }],
+        isError: true,
+      };
+    }
+  }
+
+  // Unknown tool
+  if (!name.startsWith("unreal_")) {
+    return {
+      content: [{ type: "text", text: `Unknown tool: ${name}` }],
+      isError: true,
+    };
+  }
+
+  // Proxy to Unreal
+  const toolName = name.substring(7);
+  const result = await executeUnrealTool(BASE_URL, TIMEOUT_MS, toolName, args);
+
+  let responseText = result.success
+    ? result.message + (result.data ? "\n\n" + JSON.stringify(result.data, null, 2) : "")
+    : `Error: ${result.message}`;
+
+  if (injectContext && result.success) {
+    const context = getContextForTool(toolName);
+    if (context) {
+      responseText += `\n\n---\n\n## Relevant UE 5.7 API Context\n\n${context}`;
+    }
+  }
+
+  const response = {
+    content: [{ type: "text", text: responseText }],
+    isError: !result.success,
+  };
+
+  if (result.data) {
+    response.structuredContent = {
+      success: result.success,
+      message: result.message,
+      data: result.data,
+    };
+  }
+
+  return response;
+}
+
+// ─── unreal_get_ue_context ───────────────────────────────────────────
+
+describe("CallTool — unreal_get_ue_context", () => {
+  it("returns category listing when no params provided", async () => {
+    const result = await simulateCallTool("unreal_get_ue_context", {});
+    expect(result.content[0].text).toContain("Available UE 5.7 Context Categories");
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("returns content for a valid category", async () => {
+    const result = await simulateCallTool("unreal_get_ue_context", { category: "animation" });
+    expect(result.content[0].text).toContain("Animation Context");
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("returns error for unknown category", async () => {
+    const result = await simulateCallTool("unreal_get_ue_context", { category: "nonexistent" });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Unknown category");
+  });
+
+  it("returns query results for matching keywords", async () => {
+    const result = await simulateCallTool("unreal_get_ue_context", { query: "animation blend" });
+    expect(result.content[0].text).toContain("Animation Context");
+  });
+
+  it("returns no-match message for query with no hits", async () => {
+    const result = await simulateCallTool("unreal_get_ue_context", { query: "zzz_nothing_zzz" });
+    expect(result.content[0].text).toContain("No context found");
+    expect(result.isError).toBe(false);
+  });
+});
+
+// ─── unreal_status ───────────────────────────────────────────────────
+
+describe("CallTool — unreal_status", () => {
+  it("returns connected JSON with tool_summary and context_system", async () => {
+    installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
+    ]);
+    const result = await simulateCallTool("unreal_status", {});
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.connected).toBe(true);
+    expect(parsed.tool_summary).toBeDefined();
+    expect(parsed.context_system).toContain("OK");
+    expect(parsed.total_tools).toBe(3);
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("returns disconnected JSON with isError", async () => {
+    installFetchReject(new Error("ECONNREFUSED"));
+    const result = await simulateCallTool("unreal_status", {});
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.connected).toBe(false);
+    expect(result.isError).toBe(true);
+  });
+});
+
+// ─── unreal_* proxy ──────────────────────────────────────────────────
+
+describe("CallTool — unreal tool proxy", () => {
+  it("strips unreal_ prefix and proxies to Unreal", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/spawn_actor", body: TOOL_EXECUTE_SUCCESS },
+    ]);
+    const result = await simulateCallTool("unreal_spawn_actor", { class_name: "BP_Enemy" });
+    expect(spy.mock.calls[0][0]).toContain("/mcp/tool/spawn_actor");
+    expect(result.content[0].text).toContain("Actor spawned successfully");
+    expect(result.isError).toBe(false);
+  });
+
+  it("returns formatted error on failure", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_compile", body: TOOL_EXECUTE_FAILURE },
+    ]);
+    const result = await simulateCallTool("unreal_blueprint_compile", { blueprint_path: "/Game/Bad" });
+    expect(result.content[0].text).toContain("Error:");
+    expect(result.isError).toBe(true);
+  });
+
+  it("includes structuredContent when data is present", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/spawn_actor", body: TOOL_EXECUTE_SUCCESS },
+    ]);
+    const result = await simulateCallTool("unreal_spawn_actor", {});
+    expect(result.structuredContent).toBeDefined();
+    expect(result.structuredContent.data.actorName).toBe("BP_Enemy_42");
+  });
+
+  it("injects context when enabled and tool matches", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_compile", body: { success: true, message: "Compiled" } },
+    ]);
+    const result = await simulateCallTool("unreal_blueprint_compile", {}, true);
+    expect(result.content[0].text).toContain("Relevant UE 5.7 API Context");
+    expect(result.content[0].text).toContain("Blueprint Context");
+  });
+
+  it("does not inject context when disabled", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_compile", body: { success: true, message: "Compiled" } },
+    ]);
+    const result = await simulateCallTool("unreal_blueprint_compile", {}, false);
+    expect(result.content[0].text).not.toContain("Relevant UE 5.7 API Context");
+  });
+});
+
+// ─── Unknown tool ────────────────────────────────────────────────────
+
+describe("CallTool — unknown tool", () => {
+  it("returns isError with tool name for non-unreal_ prefixed tool", async () => {
+    const result = await simulateCallTool("some_random_tool", {});
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("some_random_tool");
+  });
+});
