@@ -15,6 +15,7 @@ vi.mock("fs", () => ({
       "enhanced_input.md": "# Enhanced Input Context\nEnhanced input content here.",
       "character.md": "# Character Context\nCharacter content here.",
       "material.md": "# Material Context\nMaterial content here.",
+      "parallel_workflows.md": "# Parallel Tool Execution & Subagent Workflow Patterns\n\n## Level Setup\nLevel setup content.\n\n## Anti-Patterns\nAnti-patterns content.",
     };
     if (stubs[filename]) return stubs[filename];
     throw new Error(`ENOENT: no such file or directory, open '${filepath}'`);
@@ -23,7 +24,8 @@ vi.mock("fs", () => ({
     const filename = filepath.replace(/\\/g, "/").split("/").pop();
     const valid = [
       "animation.md", "blueprint.md", "slate.md", "actor.md",
-      "assets.md", "replication.md", "enhanced_input.md", "character.md", "material.md",
+      "assets.md", "replication.md", "enhanced_input.md", "character.md",
+      "material.md", "parallel_workflows.md",
     ];
     return valid.includes(filename);
   }),
@@ -124,6 +126,16 @@ describe("getCategoriesFromQuery", () => {
     const cats = getCategoriesFromQuery("how to set up enhanced input");
     expect(cats).toContain("enhanced_input");
   });
+
+  it("matches 'set up a level' to parallel_workflows", () => {
+    const cats = getCategoriesFromQuery("set up a level");
+    expect(cats).toContain("parallel_workflows");
+  });
+
+  it("matches 'parallel subagent' to parallel_workflows", () => {
+    const cats = getCategoriesFromQuery("parallel subagent");
+    expect(cats).toContain("parallel_workflows");
+  });
 });
 
 // ─── loadContextForCategory ──────────────────────────────────────────
@@ -136,6 +148,12 @@ describe("loadContextForCategory", () => {
 
   it("returns null for unknown category", () => {
     expect(loadContextForCategory("nonexistent")).toBeNull();
+  });
+
+  it("loads parallel_workflows content with expected sections", () => {
+    const content = loadContextForCategory("parallel_workflows");
+    expect(content).toContain("Level Setup");
+    expect(content).toContain("Anti-Patterns");
   });
 
   it("returns null when context file is missing from disk", async () => {
@@ -191,9 +209,9 @@ describe("getContextForQuery", () => {
 // ─── listCategories ──────────────────────────────────────────────────
 
 describe("listCategories", () => {
-  it("returns all 9 category names", () => {
+  it("returns all 10 category names", () => {
     const cats = listCategories();
-    expect(cats).toHaveLength(9);
+    expect(cats).toHaveLength(10);
     expect(cats).toContain("animation");
     expect(cats).toContain("blueprint");
     expect(cats).toContain("slate");
@@ -203,6 +221,7 @@ describe("listCategories", () => {
     expect(cats).toContain("enhanced_input");
     expect(cats).toContain("character");
     expect(cats).toContain("material");
+    expect(cats).toContain("parallel_workflows");
   });
 });
 
