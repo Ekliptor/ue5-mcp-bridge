@@ -12,6 +12,7 @@ import {
   checkUnrealConnection,
   fetchUnrealTools,
 } from "../../lib.js";
+import { resolveUnrealTool } from "../../tool-router.js";
 import {
   installFetchMock,
   installFetchReject,
@@ -153,6 +154,54 @@ async function simulateCallTool(name, args, { injectContext = false, asyncEnable
     }
   }
 
+  // Router tool
+  if (name === "unreal_ue") {
+    const { domain, operation, params: routerParams } = args || {};
+
+    if (!domain || !operation) {
+      return {
+        content: [{ type: "text", text: "Error: unreal_ue requires 'domain' and 'operation' parameters." }],
+        isError: true,
+      };
+    }
+
+    const targetTool = resolveUnrealTool(domain, operation);
+    if (!targetTool) {
+      return {
+        content: [{ type: "text", text: `Error: Unknown domain "${domain}". Valid domains: blueprint, anim, character, enhanced_input, material, asset` }],
+        isError: true,
+      };
+    }
+
+    const unrealArgs = { operation, ...(routerParams || {}) };
+
+    let result;
+    if (asyncEnabled) {
+      result = await executeUnrealToolAsync(BASE_URL, TIMEOUT_MS, targetTool, unrealArgs, {
+        pollIntervalMs: 100,
+        asyncTimeoutMs: 5000,
+      });
+    } else {
+      result = await executeUnrealTool(BASE_URL, TIMEOUT_MS, targetTool, unrealArgs);
+    }
+
+    let responseText = result.success
+      ? result.message + (result.data ? "\n\n" + JSON.stringify(result.data, null, 2) : "")
+      : `Error: ${result.message}`;
+
+    if (injectContext && result.success) {
+      const context = getContextForTool(targetTool);
+      if (context) {
+        responseText += `\n\n---\n\n## Relevant UE 5.7 API Context\n\n${context}`;
+      }
+    }
+
+    return {
+      content: [{ type: "text", text: responseText }],
+      isError: !result.success,
+    };
+  }
+
   // Unknown tool
   if (!name.startsWith("unreal_")) {
     return {
@@ -252,7 +301,7 @@ describe("CallTool — unreal_status", () => {
     expect(parsed.connected).toBe(true);
     expect(parsed.tool_summary).toBeDefined();
     expect(parsed.context_categories).toBeTypeOf("number");
-    expect(parsed.total_tools).toBe(3);
+    expect(parsed.total_tools).toBe(UNREAL_TOOLS_RESPONSE.tools.length);
     expect(result.isError).toBeUndefined();
   });
 
@@ -397,6 +446,132 @@ describe("CallTool — read-only sync bypass", () => {
 
     const taskSubmitCalls = spy.mock.calls.filter(c => c[0].includes("task_submit"));
     expect(taskSubmitCalls).toHaveLength(1);
+  });
+});
+
+// ─── unreal_ue router ───────────────────────────────────────────────
+
+describe("CallTool — unreal_ue router", () => {
+  it("routes blueprint domain to blueprint_modify", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_modify", body: { success: true, message: "Variable added", data: { variable: "Speed" } } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "add_variable",
+      params: { blueprint_path: "/Game/BP_Test", variable_name: "Speed", variable_type: "float" },
+    }, { asyncEnabled: false });
+    expect(result.content[0].text).toContain("Variable added");
+    expect(result.isError).toBe(false);
+  });
+
+  it("sends operation inside flat args to Unreal", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/blueprint_modify", body: { success: true, message: "Done" } },
+    ]);
+    await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "compile",
+      params: { blueprint_path: "/Game/BP_Test" },
+    }, { asyncEnabled: false });
+
+    const call = spy.mock.calls.find(c => c[0].includes("blueprint_modify"));
+    const body = JSON.parse(call[1].body);
+    expect(body.operation).toBe("compile");
+    expect(body.blueprint_path).toBe("/Game/BP_Test");
+  });
+
+  it("routes character/create_data_asset to character_data tool", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/character_data", body: { success: true, message: "Asset created" } },
+    ]);
+    await simulateCallTool("unreal_ue", {
+      domain: "character",
+      operation: "create_data_asset",
+      params: { asset_name: "Hero" },
+    }, { asyncEnabled: false });
+
+    const call = spy.mock.calls.find(c => c[0].includes("character_data"));
+    expect(call).toBeDefined();
+  });
+
+  it("routes character/set_movement_param to character tool", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/character", body: { success: true, message: "Param set" } },
+    ]);
+    await simulateCallTool("unreal_ue", {
+      domain: "character",
+      operation: "set_movement_param",
+      params: { character_name: "Hero" },
+    }, { asyncEnabled: false });
+
+    const dataCalls = spy.mock.calls.filter(c => c[0].includes("character_data"));
+    expect(dataCalls).toHaveLength(0);
+    const charCalls = spy.mock.calls.filter(c => c[0].includes("/mcp/tool/character"));
+    expect(charCalls).toHaveLength(1);
+  });
+
+  it("returns error for unknown domain", async () => {
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "invalid_domain",
+      operation: "do_thing",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("Unknown domain");
+  });
+
+  it("returns error when domain or operation missing", async () => {
+    const result1 = await simulateCallTool("unreal_ue", { operation: "add_variable" });
+    expect(result1.isError).toBe(true);
+    expect(result1.content[0].text).toContain("requires");
+
+    const result2 = await simulateCallTool("unreal_ue", { domain: "blueprint" });
+    expect(result2.isError).toBe(true);
+  });
+
+  it("works with empty params object", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_modify", body: { success: true, message: "Compiled" } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "compile",
+    }, { asyncEnabled: false });
+    expect(result.content[0].text).toContain("Compiled");
+    expect(result.isError).toBe(false);
+  });
+
+  it("injects context for resolved tool name when enabled", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_modify", body: { success: true, message: "Done" } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "compile",
+      params: { blueprint_path: "/Game/BP_Test" },
+    }, { injectContext: true, asyncEnabled: false });
+    expect(result.content[0].text).toContain("Blueprint Context");
+  });
+
+  it("routes through async path when enabled", async () => {
+    const taskId = "router-task-1";
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/task_submit", body: { success: true, message: "Submitted", data: { task_id: taskId } } },
+      { pattern: "/mcp/tool/task_status", body: { success: true, data: { status: "completed" } } },
+      { pattern: "/mcp/tool/task_result", body: { success: true, message: "Variable added", data: {} } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "add_variable",
+      params: { blueprint_path: "/Game/BP_Test" },
+    }, { asyncEnabled: true });
+
+    expect(result.content[0].text).toContain("Variable added");
+    const submitCall = spy.mock.calls.find(c => c[0].includes("task_submit"));
+    expect(submitCall).toBeDefined();
+    const body = JSON.parse(submitCall[1].body);
+    expect(body.tool_name).toBe("blueprint_modify");
+    expect(body.params.operation).toBe("add_variable");
   });
 });
 

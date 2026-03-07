@@ -297,6 +297,72 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
   }
 
+  // Router tool — dispatches to underlying mega-tool
+  if (name === "unreal_ue") {
+    const { domain, operation, params: routerParams } = args || {};
+
+    if (!domain || !operation) {
+      return {
+        content: [{ type: "text", text: "Error: unreal_ue requires 'domain' and 'operation' parameters." }],
+        isError: true,
+      };
+    }
+
+    const targetTool = resolveUnrealTool(domain, operation);
+    if (!targetTool) {
+      return {
+        content: [{
+          type: "text",
+          text: `Error: Unknown domain "${domain}". Valid domains: blueprint, anim, character, enhanced_input, material, asset`,
+        }],
+        isError: true,
+      };
+    }
+
+    const unrealArgs = { operation, ...(routerParams || {}) };
+
+    log.info("Router dispatch", { domain, operation, targetTool });
+
+    const progressToken = request.params._meta?.progressToken;
+    const onProgress = progressToken
+      ? ({ progress, total, message }) => {
+          server.notification({
+            method: "notifications/progress",
+            params: { progressToken, progress, total: total || 0, message },
+          });
+        }
+      : undefined;
+
+    let result;
+    if (CONFIG.asyncEnabled) {
+      result = await _executeUnrealToolAsync(
+        CONFIG.unrealMcpUrl,
+        CONFIG.requestTimeoutMs,
+        targetTool,
+        unrealArgs,
+        { onProgress, pollIntervalMs: CONFIG.pollIntervalMs, asyncTimeoutMs: CONFIG.asyncTimeoutMs }
+      );
+    } else {
+      result = await executeUnrealTool(targetTool, unrealArgs);
+    }
+
+    let responseText = result.success
+      ? result.message + (result.data ? "\n\n" + JSON.stringify(result.data) : "")
+      : `Error: ${result.message}`;
+
+    if (CONFIG.injectContext && result.success) {
+      const context = getContextForTool(targetTool);
+      if (context) {
+        responseText += `\n\n---\n\n## Relevant UE 5.7 API Context\n\n${context}`;
+      }
+    }
+
+    return {
+      content: [{ type: "text", text: responseText }],
+      isError: !result.success,
+    };
+  }
+
   // Strip "unreal_" prefix to get actual tool name
   if (!name.startsWith("unreal_")) {
     return {
