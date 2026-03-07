@@ -32,15 +32,20 @@ import { listCategories } from "../../context-loader.js";
 
 const BASE_URL = "http://localhost:3000";
 const TIMEOUT_MS = 5000;
+const DEFAULT_TTL_MS = 30000;
+
+// Simulated tool cache (mirrors toolCache in index.js)
+let toolCache = { tools: [], timestamp: 0 };
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  toolCache = { tools: [], timestamp: 0 };
 });
 
 /**
- * Replicate the ListTools handler logic from index.js
+ * Replicate the ListTools handler logic from index.js (with TTL cache)
  */
-async function simulateListTools() {
+async function simulateListTools({ toolCacheTtlMs = DEFAULT_TTL_MS } = {}) {
   const status = await checkUnrealConnection(BASE_URL, TIMEOUT_MS);
 
   if (!status.connected) {
@@ -56,12 +61,19 @@ async function simulateListTools() {
     };
   }
 
-  const unrealTools = await fetchUnrealTools(BASE_URL, TIMEOUT_MS);
+  let unrealTools;
+  const cacheAge = Date.now() - toolCache.timestamp;
+  if (toolCache.tools.length > 0 && cacheAge < toolCacheTtlMs) {
+    unrealTools = toolCache.tools;
+  } else {
+    unrealTools = await fetchUnrealTools(BASE_URL, TIMEOUT_MS);
+    toolCache = { tools: unrealTools, timestamp: Date.now() };
+  }
 
   const mcpTools = unrealTools.map((tool) => ({
     name: `unreal_${tool.name}`,
-    description: `[Unreal Editor] ${tool.description}`,
-    inputSchema: convertToMCPSchema(tool.parameters),
+    description: tool.description,
+    inputSchema: convertToMCPSchema(tool.parameters, true),
     annotations: convertAnnotations(tool.annotations),
   }));
 
@@ -131,11 +143,11 @@ describe("ListTools — connected", () => {
     expect(result.tools[0].description).toContain("MyGame");
   });
 
-  it("maps Unreal tools with unreal_ prefix and [Unreal Editor] description", async () => {
+  it("maps Unreal tools with unreal_ prefix and original description", async () => {
     const result = await simulateListTools();
     const spawnTool = result.tools.find((t) => t.name === "unreal_spawn_actor");
     expect(spawnTool).toBeDefined();
-    expect(spawnTool.description).toMatch(/^\[Unreal Editor\]/);
+    expect(spawnTool.description).toBe("Spawn an actor in the current level");
   });
 
   it("puts unreal_get_ue_context last", async () => {
@@ -178,5 +190,68 @@ describe("ListTools — empty tool list from Unreal", () => {
     expect(result.tools).toHaveLength(2);
     expect(result.tools[0].name).toBe("unreal_status");
     expect(result.tools[1].name).toBe("unreal_get_ue_context");
+  });
+});
+
+// ─── TTL cache ────────────────────────────────────────────────────────
+
+describe("ListTools — TTL cache", () => {
+  it("uses cached tools on second call within TTL", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
+    ]);
+
+    // First call — populates cache
+    await simulateListTools();
+    const toolsFetchCount1 = spy.mock.calls.filter(c => c[0].includes("/mcp/tools")).length;
+    expect(toolsFetchCount1).toBe(1);
+
+    // Second call — should use cache, no new /mcp/tools fetch
+    await simulateListTools();
+    const toolsFetchCount2 = spy.mock.calls.filter(c => c[0].includes("/mcp/tools")).length;
+    expect(toolsFetchCount2).toBe(1); // still 1, no re-fetch
+  });
+
+  it("re-fetches tools after cache expires", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
+    ]);
+
+    // First call — populates cache
+    await simulateListTools({ toolCacheTtlMs: 1 });
+
+    // Wait for TTL to expire
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Second call — cache expired, should re-fetch
+    await simulateListTools({ toolCacheTtlMs: 1 });
+    const toolsFetchCount = spy.mock.calls.filter(c => c[0].includes("/mcp/tools")).length;
+    expect(toolsFetchCount).toBe(2);
+  });
+
+  it("still checks connection on every call even with cached tools", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
+    ]);
+
+    await simulateListTools();
+    await simulateListTools();
+
+    const statusFetchCount = spy.mock.calls.filter(c => c[0].includes("/mcp/status")).length;
+    expect(statusFetchCount).toBe(2);
+  });
+
+  it("returns same tool count from cache as from fresh fetch", async () => {
+    installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
+    ]);
+
+    const result1 = await simulateListTools();
+    const result2 = await simulateListTools();
+    expect(result1.tools).toHaveLength(result2.tools.length);
   });
 });

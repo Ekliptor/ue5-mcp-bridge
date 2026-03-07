@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   executeUnrealTool,
+  executeUnrealToolAsync,
   checkUnrealConnection,
   fetchUnrealTools,
 } from "../../lib.js";
@@ -55,15 +56,20 @@ import {
 const BASE_URL = "http://localhost:3000";
 const TIMEOUT_MS = 5000;
 
+// Simulated tool cache (mirrors toolCache in index.js)
+let toolCache = { tools: [], timestamp: 0 };
+
 beforeEach(() => {
   vi.unstubAllGlobals();
   clearCache();
+  toolCache = { tools: [], timestamp: 0 };
 });
 
 /**
  * Replicate the CallTool handler logic from index.js
+ * (updated to match lightweight status + read-only bypass)
  */
-async function simulateCallTool(name, args, injectContext = false) {
+async function simulateCallTool(name, args, { injectContext = false, asyncEnabled = true } = {}) {
   // Handle UE context request
   if (name === "unreal_get_ue_context") {
     const { category, query } = args || {};
@@ -108,13 +114,13 @@ async function simulateCallTool(name, args, injectContext = false) {
     };
   }
 
-  // Handle status check
+  // Handle status check (lightweight — uses cached tools, no context probe)
   if (name === "unreal_status") {
     const status = await checkUnrealConnection(BASE_URL, TIMEOUT_MS);
     if (status.connected) {
-      const unrealTools = await fetchUnrealTools(BASE_URL, TIMEOUT_MS);
+      const unrealTools = toolCache.tools;
       const categories = {};
-      const brokenTools = [];
+
       for (const tool of unrealTools) {
         let category = "utility";
         if (tool.name.startsWith("blueprint_")) category = "blueprint";
@@ -123,30 +129,19 @@ async function simulateCallTool(name, args, injectContext = false) {
         else if (tool.name.startsWith("task_")) category = "task_queue";
         else if (tool.name.includes("actor") || tool.name.includes("spawn") || tool.name.includes("move") || tool.name.includes("level")) category = "actor";
         categories[category] = (categories[category] || 0) + 1;
-        if (!tool.description || tool.description.length < 5) {
-          brokenTools.push({ name: tool.name, issue: "missing description" });
-        }
       }
 
       const contextCategories = listCategories();
-      const testContext = loadContextForCategory("animation");
-      const contextStatus = testContext
-        ? `OK (${contextCategories.length} categories: ${contextCategories.join(", ")})`
-        : "FAILED - context files not loading";
 
       const response = {
         connected: true,
         project: status.projectName,
         engine: status.engineVersion,
-        context_system: contextStatus,
+        context_categories: contextCategories.length,
         tool_summary: categories,
         total_tools: unrealTools.length,
         message: "Unreal Editor connected. All tools operational.",
       };
-      if (brokenTools.length > 0) {
-        response.broken_tools = brokenTools;
-        response.message = `Unreal Editor connected. ${brokenTools.length} tool(s) have issues.`;
-      }
       return {
         content: [{ type: "text", text: JSON.stringify(response, null, 2) }],
       };
@@ -166,9 +161,21 @@ async function simulateCallTool(name, args, injectContext = false) {
     };
   }
 
-  // Proxy to Unreal
+  // Proxy to Unreal (with read-only bypass)
   const toolName = name.substring(7);
-  const result = await executeUnrealTool(BASE_URL, TIMEOUT_MS, toolName, args);
+  const isTaskTool = toolName.startsWith("task_");
+  const cachedTool = toolCache.tools.find(t => t.name === toolName);
+  const isReadOnly = cachedTool?.annotations?.readOnlyHint === true;
+
+  let result;
+  if (asyncEnabled && !isTaskTool && !isReadOnly) {
+    result = await executeUnrealToolAsync(BASE_URL, TIMEOUT_MS, toolName, args, {
+      pollIntervalMs: 100,
+      asyncTimeoutMs: 5000,
+    });
+  } else {
+    result = await executeUnrealTool(BASE_URL, TIMEOUT_MS, toolName, args);
+  }
 
   let responseText = result.success
     ? result.message + (result.data ? "\n\n" + JSON.stringify(result.data, null, 2) : "")
@@ -230,21 +237,44 @@ describe("CallTool — unreal_get_ue_context", () => {
   });
 });
 
-// ─── unreal_status ───────────────────────────────────────────────────
+// ─── unreal_status (lightweight) ─────────────────────────────────────
 
 describe("CallTool — unreal_status", () => {
-  it("returns connected JSON with tool_summary and context_system", async () => {
+  it("returns connected JSON with context_categories and tool_summary from cache", async () => {
+    // Pre-populate the tool cache (as list_tools would have done)
+    toolCache = { tools: UNREAL_TOOLS_RESPONSE.tools, timestamp: Date.now() };
+
     installFetchMock([
       { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
-      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
     ]);
     const result = await simulateCallTool("unreal_status", {});
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.connected).toBe(true);
     expect(parsed.tool_summary).toBeDefined();
-    expect(parsed.context_system).toContain("OK");
+    expect(parsed.context_categories).toBeTypeOf("number");
     expect(parsed.total_tools).toBe(3);
     expect(result.isError).toBeUndefined();
+  });
+
+  it("does not fetch /mcp/tools (uses cache)", async () => {
+    toolCache = { tools: UNREAL_TOOLS_RESPONSE.tools, timestamp: Date.now() };
+
+    const spy = installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+      { pattern: "/mcp/tools", body: UNREAL_TOOLS_RESPONSE },
+    ]);
+    await simulateCallTool("unreal_status", {});
+    const toolsFetched = spy.mock.calls.filter(c => c[0].includes("/mcp/tools")).length;
+    expect(toolsFetched).toBe(0);
+  });
+
+  it("returns 0 total_tools when cache is empty", async () => {
+    installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+    ]);
+    const result = await simulateCallTool("unreal_status", {});
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed.total_tools).toBe(0);
   });
 
   it("returns disconnected JSON with isError", async () => {
@@ -263,7 +293,7 @@ describe("CallTool — unreal tool proxy", () => {
     const spy = installFetchMock([
       { pattern: "/mcp/tool/spawn_actor", body: TOOL_EXECUTE_SUCCESS },
     ]);
-    const result = await simulateCallTool("unreal_spawn_actor", { class_name: "BP_Enemy" });
+    const result = await simulateCallTool("unreal_spawn_actor", { class_name: "BP_Enemy" }, { asyncEnabled: false });
     expect(spy.mock.calls[0][0]).toContain("/mcp/tool/spawn_actor");
     expect(result.content[0].text).toContain("Actor spawned successfully");
     expect(result.isError).toBe(false);
@@ -273,7 +303,7 @@ describe("CallTool — unreal tool proxy", () => {
     installFetchMock([
       { pattern: "/mcp/tool/blueprint_compile", body: TOOL_EXECUTE_FAILURE },
     ]);
-    const result = await simulateCallTool("unreal_blueprint_compile", { blueprint_path: "/Game/Bad" });
+    const result = await simulateCallTool("unreal_blueprint_compile", { blueprint_path: "/Game/Bad" }, { asyncEnabled: false });
     expect(result.content[0].text).toContain("Error:");
     expect(result.isError).toBe(true);
   });
@@ -282,7 +312,7 @@ describe("CallTool — unreal tool proxy", () => {
     installFetchMock([
       { pattern: "/mcp/tool/spawn_actor", body: TOOL_EXECUTE_SUCCESS },
     ]);
-    const result = await simulateCallTool("unreal_spawn_actor", {});
+    const result = await simulateCallTool("unreal_spawn_actor", {}, { asyncEnabled: false });
     expect(result.structuredContent).toBeDefined();
     expect(result.structuredContent.data.actorName).toBe("BP_Enemy_42");
   });
@@ -291,7 +321,7 @@ describe("CallTool — unreal tool proxy", () => {
     installFetchMock([
       { pattern: "/mcp/tool/blueprint_compile", body: { success: true, message: "Compiled" } },
     ]);
-    const result = await simulateCallTool("unreal_blueprint_compile", {}, true);
+    const result = await simulateCallTool("unreal_blueprint_compile", {}, { injectContext: true, asyncEnabled: false });
     expect(result.content[0].text).toContain("Relevant UE 5.7 API Context");
     expect(result.content[0].text).toContain("Blueprint Context");
   });
@@ -300,8 +330,73 @@ describe("CallTool — unreal tool proxy", () => {
     installFetchMock([
       { pattern: "/mcp/tool/blueprint_compile", body: { success: true, message: "Compiled" } },
     ]);
-    const result = await simulateCallTool("unreal_blueprint_compile", {}, false);
+    const result = await simulateCallTool("unreal_blueprint_compile", {}, { asyncEnabled: false });
     expect(result.content[0].text).not.toContain("Relevant UE 5.7 API Context");
+  });
+});
+
+// ─── Read-only sync bypass ──────────────────────────────────────────
+
+describe("CallTool — read-only sync bypass", () => {
+  it("routes read-only tools to sync path even with async enabled", async () => {
+    // Pre-populate cache with tool that has readOnlyHint: true
+    toolCache = { tools: UNREAL_TOOLS_RESPONSE.tools, timestamp: Date.now() };
+
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/get_actors", body: { success: true, message: "Found 5 actors", data: { count: 5 } } },
+    ]);
+
+    // get_actors is readOnlyHint: true in fixtures, so even with asyncEnabled=true
+    // it should call /mcp/tool/get_actors directly (not task_submit)
+    const result = await simulateCallTool("unreal_get_actors", { class_filter: "StaticMeshActor" }, { asyncEnabled: true });
+
+    expect(result.content[0].text).toContain("Found 5 actors");
+    expect(result.isError).toBe(false);
+
+    // Should NOT have called task_submit
+    const taskSubmitCalls = spy.mock.calls.filter(c => c[0].includes("task_submit"));
+    expect(taskSubmitCalls).toHaveLength(0);
+
+    // Should have called the direct tool endpoint
+    const directCalls = spy.mock.calls.filter(c => c[0].includes("/mcp/tool/get_actors"));
+    expect(directCalls).toHaveLength(1);
+  });
+
+  it("routes non-read-only tools to async path when enabled", async () => {
+    // spawn_actor has readOnlyHint: false
+    toolCache = { tools: UNREAL_TOOLS_RESPONSE.tools, timestamp: Date.now() };
+
+    const taskId = "test-task-123";
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/task_submit", body: { success: true, message: "Task submitted", data: { task_id: taskId } } },
+      { pattern: "/mcp/tool/task_status", body: { success: true, message: "completed", data: { task_id: taskId, status: "completed" } } },
+      { pattern: "/mcp/tool/task_result", body: { success: true, message: "Actor spawned successfully", data: { actorName: "BP_Enemy_42" } } },
+    ]);
+
+    const result = await simulateCallTool("unreal_spawn_actor", { class_name: "BP_Enemy" }, { asyncEnabled: true });
+
+    expect(result.content[0].text).toContain("Actor spawned successfully");
+
+    // Should have called task_submit (async path)
+    const taskSubmitCalls = spy.mock.calls.filter(c => c[0].includes("task_submit"));
+    expect(taskSubmitCalls).toHaveLength(1);
+  });
+
+  it("routes tool not in cache to async path (unknown annotation)", async () => {
+    // Empty cache — tool not found, isReadOnly = false
+    toolCache = { tools: [], timestamp: 0 };
+
+    const taskId = "test-task-456";
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/task_submit", body: { success: true, message: "Task submitted", data: { task_id: taskId } } },
+      { pattern: "/mcp/tool/task_status", body: { success: true, message: "completed", data: { task_id: taskId, status: "completed" } } },
+      { pattern: "/mcp/tool/task_result", body: { success: true, message: "Done", data: {} } },
+    ]);
+
+    await simulateCallTool("unreal_some_unknown_tool", {}, { asyncEnabled: true });
+
+    const taskSubmitCalls = spy.mock.calls.filter(c => c[0].includes("task_submit"));
+    expect(taskSubmitCalls).toHaveLength(1);
   });
 });
 

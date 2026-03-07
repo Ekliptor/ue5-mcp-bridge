@@ -114,8 +114,9 @@ export async function checkUnrealConnection(baseUrl, timeoutMs) {
 /**
  * Convert Unreal tool parameter schema to MCP tool input schema
  * @param {Array} unrealParams - array of parameter descriptors from Unreal
+ * @param {boolean} compact - if true, omit defaults and trim long descriptions to reduce token count
  */
-export function convertToMCPSchema(unrealParams) {
+export function convertToMCPSchema(unrealParams, compact = false) {
   const properties = {};
   const required = [];
 
@@ -125,10 +126,15 @@ export function convertToMCPSchema(unrealParams) {
             param.type === "boolean" ? "boolean" :
             param.type === "array" ? "array" :
             param.type === "object" ? "object" : "string",
-      description: param.description,
     };
 
-    if (param.default !== undefined) {
+    if (param.description) {
+      prop.description = compact && param.description.length > 80
+        ? param.description.slice(0, 77) + "..."
+        : param.description;
+    }
+
+    if (!compact && param.default !== undefined) {
       prop.default = param.default;
     }
 

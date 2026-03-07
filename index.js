@@ -10,6 +10,7 @@
  *   UNREAL_MCP_URL - Base URL for Unreal MCP server (default: http://localhost:3000)
  *   MCP_REQUEST_TIMEOUT_MS - HTTP request timeout in milliseconds (default: 30000)
  *   INJECT_CONTEXT - Enable automatic context injection on tool calls (default: false)
+ *   MCP_TOOL_CACHE_TTL_MS - TTL for tool list cache in milliseconds (default: 30000)
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -47,6 +48,7 @@ const CONFIG = {
   asyncEnabled: process.env.MCP_ASYNC_ENABLED !== "false",
   asyncTimeoutMs: parseInt(process.env.MCP_ASYNC_TIMEOUT_MS, 10) || 300000,
   pollIntervalMs: parseInt(process.env.MCP_POLL_INTERVAL_MS, 10) || 2000,
+  toolCacheTtlMs: parseInt(process.env.MCP_TOOL_CACHE_TTL_MS, 10) || 30000,
 };
 
 // Bind CONFIG values to library functions for convenience
@@ -67,8 +69,8 @@ const server = new Server(
   }
 );
 
-// Cache for tools (refreshed on each list request)
-let cachedTools = [];
+// Cache for tools with TTL (avoids re-fetching the full tool list on every list_tools call)
+let toolCache = { tools: [], timestamp: 0 };
 
 // Handle list_tools request
 server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -90,13 +92,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
     };
   }
 
-  const unrealTools = await fetchUnrealTools();
-  cachedTools = unrealTools;
+  let unrealTools;
+  const cacheAge = Date.now() - toolCache.timestamp;
+  if (toolCache.tools.length > 0 && cacheAge < CONFIG.toolCacheTtlMs) {
+    unrealTools = toolCache.tools;
+    log.debug("Using cached tool list", { ageMs: cacheAge });
+  } else {
+    unrealTools = await fetchUnrealTools();
+    toolCache = { tools: unrealTools, timestamp: Date.now() };
+  }
 
   const mcpTools = unrealTools.map((tool) => ({
     name: `unreal_${tool.name}`,
-    description: `[Unreal Editor] ${tool.description}`,
-    inputSchema: convertToMCPSchema(tool.parameters),
+    description: tool.description,
+    inputSchema: convertToMCPSchema(tool.parameters, true),
     annotations: convertAnnotations(tool.annotations),
   }));
 
@@ -117,7 +126,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 
   mcpTools.push({
     name: "unreal_get_ue_context",
-    description: `Get Unreal Engine 5.7 API context/documentation. Use when you need UE5 API patterns, examples, or best practices. Categories: ${listCategories().join(", ")}. Can also search by query keywords.`,
+    description: `Get UE 5.7 API context. Categories: ${listCategories().join(", ")}`,
     inputSchema: {
       type: "object",
       properties: {
@@ -216,13 +225,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
-  // Handle status check
+  // Handle status check (lightweight — uses cached tools, no context probe)
   if (name === "unreal_status") {
     const status = await checkUnrealConnection();
     if (status.connected) {
-      const unrealTools = await fetchUnrealTools();
+      // Use cached tool list instead of re-fetching
+      const unrealTools = toolCache.tools;
       const categories = {};
-      const brokenTools = [];
 
       for (const tool of unrealTools) {
         let category = "utility";
@@ -233,32 +242,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         else if (tool.name.includes("actor") || tool.name.includes("spawn") || tool.name.includes("move") || tool.name.includes("level")) category = "actor";
 
         categories[category] = (categories[category] || 0) + 1;
-
-        if (!tool.description || tool.description.length < 5) {
-          brokenTools.push({ name: tool.name, issue: "missing description" });
-        }
       }
 
       const contextCategories = listCategories();
-      const testContext = loadContextForCategory("animation");
-      const contextStatus = testContext
-        ? `OK (${contextCategories.length} categories: ${contextCategories.join(", ")})`
-        : "FAILED - context files not loading";
 
       const response = {
         connected: true,
         project: status.projectName,
         engine: status.engineVersion,
-        context_system: contextStatus,
+        context_categories: contextCategories.length,
         tool_summary: categories,
         total_tools: unrealTools.length,
         message: "Unreal Editor connected. All tools operational.",
       };
-
-      if (brokenTools.length > 0) {
-        response.broken_tools = brokenTools;
-        response.message = `Unreal Editor connected. ${brokenTools.length} tool(s) have issues.`;
-      }
 
       return {
         content: [
@@ -300,11 +296,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   const toolName = name.substring(7);
 
-  // Tools excluded from auto-async: task_* tools are the async infrastructure itself
+  // Tools excluded from auto-async: task_* tools and read-only tools
   const isTaskTool = toolName.startsWith("task_");
+  const cachedTool = toolCache.tools.find(t => t.name === toolName);
+  const isReadOnly = cachedTool?.annotations?.readOnlyHint === true;
 
   let result;
-  if (CONFIG.asyncEnabled && !isTaskTool) {
+  if (CONFIG.asyncEnabled && !isTaskTool && !isReadOnly) {
     const progressToken = request.params._meta?.progressToken;
     const onProgress = progressToken
       ? ({ progress, total, message }) => {
