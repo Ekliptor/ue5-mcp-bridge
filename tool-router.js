@@ -82,6 +82,32 @@ export function classifyTool(toolName) {
   return "mega";
 }
 
+// Reverse map: tool name → domain (built from DOMAIN_TOOL_MAP)
+const TOOL_TO_DOMAIN = Object.fromEntries(
+  Object.entries(DOMAIN_TOOL_MAP).map(([domain, tool]) => [tool, domain])
+);
+TOOL_TO_DOMAIN["character_data"] = "character"; // sub-route
+
+/**
+ * Categorize a tool for the unreal_status health check.
+ * Uses the router classification + domain map for accurate grouping.
+ * @param {string} toolName - raw Unreal tool name (no "unreal_" prefix)
+ * @returns {string} Category name for status display
+ */
+export function categorizeToolForStatus(toolName) {
+  const cls = classifyTool(toolName);
+  if (cls === "mega") return TOOL_TO_DOMAIN[toolName] || "utility";
+  if (cls === "hidden") return toolName.startsWith("task_") ? "task_queue" : "scripting";
+  // Simple tools
+  if (toolName.startsWith("asset_")) return "asset";
+  if (toolName === "blueprint_query") return "blueprint";
+  if (toolName === "open_level") return "level";
+  if (toolName.includes("actor") || toolName === "spawn_actor" ||
+      toolName === "move_actor" || toolName === "delete_actors" ||
+      toolName === "set_property") return "actor";
+  return "utility"; // capture_viewport, get_output_log
+}
+
 /**
  * Static MCP schema for the unreal_ue router tool.
  */

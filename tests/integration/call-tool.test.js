@@ -13,7 +13,7 @@ import {
   fetchUnrealTools,
   formatToolResponse,
 } from "../../lib.js";
-import { resolveUnrealTool } from "../../tool-router.js";
+import { resolveUnrealTool, classifyTool, categorizeToolForStatus } from "../../tool-router.js";
 import {
   installFetchMock,
   installFetchReject,
@@ -126,16 +126,12 @@ async function simulateCallTool(name, args, { injectContext = false, asyncEnable
       const categories = {};
 
       for (const tool of unrealTools) {
-        let category = "utility";
-        if (tool.name.startsWith("blueprint_")) category = "blueprint";
-        else if (tool.name.startsWith("anim_blueprint")) category = "animation";
-        else if (tool.name.startsWith("asset_")) category = "asset";
-        else if (tool.name.startsWith("task_")) category = "task_queue";
-        else if (tool.name.includes("actor") || tool.name.includes("spawn") || tool.name.includes("move") || tool.name.includes("level")) category = "actor";
+        const category = categorizeToolForStatus(tool.name);
         categories[category] = (categories[category] || 0) + 1;
       }
 
       const contextCategories = listCategories();
+      const simpleCount = unrealTools.filter(t => classifyTool(t.name) === "simple").length;
 
       const response = {
         connected: true,
@@ -144,6 +140,7 @@ async function simulateCallTool(name, args, { injectContext = false, asyncEnable
         context_categories: contextCategories.length,
         tool_summary: categories,
         total_tools: unrealTools.length,
+        exposed_tools: simpleCount + 3,
         message: "Unreal Editor connected. All tools operational.",
       };
       return {
@@ -289,6 +286,38 @@ describe("CallTool — unreal_status", () => {
     const result = await simulateCallTool("unreal_status", {});
     const parsed = JSON.parse(result.content[0].text);
     expect(parsed.total_tools).toBe(0);
+  });
+
+  it("returns exposed_tools count (simple + 3 meta tools)", async () => {
+    toolCache = { tools: UNREAL_TOOLS_RESPONSE.tools, timestamp: Date.now() };
+
+    installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+    ]);
+    const result = await simulateCallTool("unreal_status", {});
+    const parsed = JSON.parse(result.content[0].text);
+
+    // Count simple tools in fixtures
+    const simpleCount = UNREAL_TOOLS_RESPONSE.tools.filter(t => classifyTool(t.name) === "simple").length;
+    expect(parsed.exposed_tools).toBe(simpleCount + 3);
+  });
+
+  it("tool_summary uses categorizeToolForStatus categories", async () => {
+    toolCache = { tools: UNREAL_TOOLS_RESPONSE.tools, timestamp: Date.now() };
+
+    installFetchMock([
+      { pattern: "/mcp/status", body: UNREAL_STATUS_RESPONSE },
+    ]);
+    const result = await simulateCallTool("unreal_status", {});
+    const parsed = JSON.parse(result.content[0].text);
+
+    // Verify categories match what categorizeToolForStatus would produce
+    const expectedCategories = {};
+    for (const tool of UNREAL_TOOLS_RESPONSE.tools) {
+      const cat = categorizeToolForStatus(tool.name);
+      expectedCategories[cat] = (expectedCategories[cat] || 0) + 1;
+    }
+    expect(parsed.tool_summary).toEqual(expectedCategories);
   });
 
   it("returns disconnected JSON with isError", async () => {

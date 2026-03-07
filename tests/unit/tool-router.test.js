@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyTool,
   resolveUnrealTool,
+  categorizeToolForStatus,
   ROUTER_TOOL_SCHEMA,
   SIMPLE_TOOL_NAMES,
   HIDDEN_TOOL_NAMES,
@@ -142,5 +143,59 @@ describe("classification sets", () => {
     for (const name of SIMPLE_TOOL_NAMES) {
       expect(HIDDEN_TOOL_NAMES.has(name)).toBe(false);
     }
+  });
+});
+
+describe("categorizeToolForStatus", () => {
+  it("categorizes actor tools", () => {
+    for (const name of ["spawn_actor", "move_actor", "delete_actors", "set_property", "get_level_actors"]) {
+      expect(categorizeToolForStatus(name)).toBe("actor");
+    }
+  });
+
+  it("categorizes level tools", () => {
+    expect(categorizeToolForStatus("open_level")).toBe("level");
+  });
+
+  it("categorizes simple asset tools", () => {
+    for (const name of ["asset_search", "asset_dependencies", "asset_referencers"]) {
+      expect(categorizeToolForStatus(name)).toBe("asset");
+    }
+  });
+
+  it("categorizes blueprint_query as blueprint", () => {
+    expect(categorizeToolForStatus("blueprint_query")).toBe("blueprint");
+  });
+
+  it("categorizes utility tools", () => {
+    for (const name of ["capture_viewport", "get_output_log"]) {
+      expect(categorizeToolForStatus(name)).toBe("utility");
+    }
+  });
+
+  it("categorizes mega tools by domain", () => {
+    expect(categorizeToolForStatus("blueprint_modify")).toBe("blueprint");
+    expect(categorizeToolForStatus("anim_blueprint_modify")).toBe("anim");
+    expect(categorizeToolForStatus("character")).toBe("character");
+    expect(categorizeToolForStatus("character_data")).toBe("character");
+    expect(categorizeToolForStatus("enhanced_input")).toBe("enhanced_input");
+    expect(categorizeToolForStatus("material")).toBe("material");
+    expect(categorizeToolForStatus("asset")).toBe("asset");
+  });
+
+  it("categorizes task queue tools", () => {
+    for (const name of ["task_submit", "task_status", "task_result", "task_list", "task_cancel"]) {
+      expect(categorizeToolForStatus(name)).toBe("task_queue");
+    }
+  });
+
+  it("categorizes scripting tools", () => {
+    for (const name of ["execute_script", "cleanup_scripts", "get_script_history", "run_console_command"]) {
+      expect(categorizeToolForStatus(name)).toBe("scripting");
+    }
+  });
+
+  it("returns utility for unknown tools", () => {
+    expect(categorizeToolForStatus("future_unknown_tool")).toBe("utility");
   });
 });

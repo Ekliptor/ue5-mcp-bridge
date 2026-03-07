@@ -45,6 +45,7 @@ import {
 import {
   classifyTool,
   resolveUnrealTool,
+  categorizeToolForStatus,
   ROUTER_TOOL_SCHEMA,
 } from "./tool-router.js";
 
@@ -70,7 +71,7 @@ const formatToolResponse = (toolName, result) =>
 const server = new Server(
   {
     name: "ue5-mcp-server",
-    version: "1.4.0",
+    version: "1.4.1",
   },
   {
     capabilities: {
@@ -253,17 +254,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const categories = {};
 
       for (const tool of unrealTools) {
-        let category = "utility";
-        if (tool.name.startsWith("blueprint_")) category = "blueprint";
-        else if (tool.name.startsWith("anim_blueprint")) category = "animation";
-        else if (tool.name.startsWith("asset_")) category = "asset";
-        else if (tool.name.startsWith("task_")) category = "task_queue";
-        else if (tool.name.includes("actor") || tool.name.includes("spawn") || tool.name.includes("move") || tool.name.includes("level")) category = "actor";
-
+        const category = categorizeToolForStatus(tool.name);
         categories[category] = (categories[category] || 0) + 1;
       }
 
       const contextCategories = listCategories();
+      const simpleCount = unrealTools.filter(t => classifyTool(t.name) === "simple").length;
 
       const response = {
         connected: true,
@@ -272,6 +268,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         context_categories: contextCategories.length,
         tool_summary: categories,
         total_tools: unrealTools.length,
+        exposed_tools: simpleCount + 3, // simple tools + status + router + context
         message: "Unreal Editor connected. All tools operational.",
       };
 
@@ -416,7 +413,7 @@ async function main() {
   const contextStatus = testContext ? `OK (${categories.length} categories loaded)` : "FAILED";
 
   log.info("UE5 MCP Server started", {
-    version: "1.4.0",
+    version: "1.4.1",
     unrealUrl: CONFIG.unrealMcpUrl,
     timeoutMs: CONFIG.requestTimeoutMs,
     asyncEnabled: CONFIG.asyncEnabled,

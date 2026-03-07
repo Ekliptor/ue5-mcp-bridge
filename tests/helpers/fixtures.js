@@ -101,6 +101,49 @@ export const UNREAL_TOOLS_RESPONSE = {
         openWorldHint: false,
       },
     },
+    // --- Mega tools (operation-based, routed via unreal_ue) ---
+    {
+      name: "character",
+      description: "Character blueprint and movement operations",
+      parameters: [
+        { name: "operation", type: "string", description: "Operation to perform", required: true },
+        { name: "blueprint_path", type: "string", description: "Character blueprint path", required: false },
+      ],
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    {
+      name: "material",
+      description: "Material instance and parameter operations",
+      parameters: [
+        { name: "operation", type: "string", description: "Operation to perform", required: true },
+        { name: "material_path", type: "string", description: "Material asset path", required: false },
+      ],
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
+    {
+      name: "enhanced_input",
+      description: "Enhanced Input action and mapping context operations",
+      parameters: [
+        { name: "operation", type: "string", description: "Operation to perform", required: true },
+        { name: "action_name", type: "string", description: "Input action name", required: false },
+      ],
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+    },
   ],
 };
 
