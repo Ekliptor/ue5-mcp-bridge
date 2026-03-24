@@ -7,6 +7,7 @@ import {
   SIMPLE_TOOL_NAMES,
   HIDDEN_TOOL_NAMES,
   DOMAIN_TOOL_MAP,
+  BLUEPRINT_QUERY_OPS,
 } from "../../tool-router.js";
 
 describe("classifyTool", () => {
@@ -48,12 +49,29 @@ describe("classifyTool", () => {
 });
 
 describe("resolveUnrealTool", () => {
-  it("resolves all non-character domains", () => {
+  it("resolves non-character, non-blueprint-query domains", () => {
     expect(resolveUnrealTool("blueprint", "add_variable")).toBe("blueprint_modify");
     expect(resolveUnrealTool("anim", "add_state")).toBe("anim_blueprint_modify");
     expect(resolveUnrealTool("enhanced_input", "create_action")).toBe("enhanced_input");
     expect(resolveUnrealTool("material", "create_material_instance")).toBe("material");
     expect(resolveUnrealTool("asset", "duplicate")).toBe("asset");
+  });
+
+  it("routes blueprint domain to 'blueprint_query' for read ops", () => {
+    for (const op of BLUEPRINT_QUERY_OPS) {
+      expect(resolveUnrealTool("blueprint", op)).toBe("blueprint_query");
+    }
+  });
+
+  it("routes blueprint domain to 'blueprint_modify' for write ops", () => {
+    const writeOps = [
+      "create", "add_variable", "remove_variable", "add_function",
+      "remove_function", "add_node", "add_nodes", "delete_node",
+      "connect_pins", "disconnect_pins", "set_pin_value",
+    ];
+    for (const op of writeOps) {
+      expect(resolveUnrealTool("blueprint", op)).toBe("blueprint_modify");
+    }
   });
 
   it("routes character domain to 'character' for movement ops", () => {
@@ -110,6 +128,16 @@ describe("ROUTER_TOOL_SCHEMA", () => {
     expect(ROUTER_TOOL_SCHEMA.annotations.destructiveHint).toBe(true);
   });
 
+  it("description splits blueprint ops into modify and query", () => {
+    const desc = ROUTER_TOOL_SCHEMA.description;
+    expect(desc).toContain("modify ops:");
+    expect(desc).toContain("query ops:");
+    // Verify real backend op names are present
+    expect(desc).toContain("add_variable");
+    expect(desc).toContain("inspect");
+    expect(desc).toContain("get_graph");
+  });
+
   it("description includes key param names for discoverability", () => {
     const desc = ROUTER_TOOL_SCHEMA.description;
     expect(desc).toContain("blueprint_path");
@@ -137,6 +165,10 @@ describe("classification sets", () => {
     expect(DOMAIN_TOOL_MAP.enhanced_input).toBe("enhanced_input");
     expect(DOMAIN_TOOL_MAP.material).toBe("material");
     expect(DOMAIN_TOOL_MAP.asset).toBe("asset");
+  });
+
+  it("BLUEPRINT_QUERY_OPS has 9 entries", () => {
+    expect(BLUEPRINT_QUERY_OPS.size).toBe(9);
   });
 
   it("no overlap between simple and hidden sets", () => {

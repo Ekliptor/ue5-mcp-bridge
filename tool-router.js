@@ -48,6 +48,19 @@ export const DOMAIN_TOOL_MAP = {
   asset: "asset",
 };
 
+// Blueprint operations that route to "blueprint_query" instead of "blueprint_modify"
+export const BLUEPRINT_QUERY_OPS = new Set([
+  "list",
+  "inspect",
+  "get_graph",
+  "get_nodes",
+  "get_variables",
+  "get_functions",
+  "get_node_pins",
+  "search_nodes",
+  "find_references",
+]);
+
 // Character operations that route to "character_data" instead of "character"
 const CHARACTER_DATA_OPS = new Set([
   "create_data_asset",
@@ -67,6 +80,9 @@ export function resolveUnrealTool(domain, operation) {
   if (!domain) return null;
   if (domain === "character" && CHARACTER_DATA_OPS.has(operation)) {
     return "character_data";
+  }
+  if (domain === "blueprint" && BLUEPRINT_QUERY_OPS.has(operation)) {
+    return "blueprint_query";
   }
   return DOMAIN_TOOL_MAP[domain] ?? null;
 }
@@ -116,13 +132,17 @@ export const ROUTER_TOOL_SCHEMA = {
   description: [
     "Route a command to a domain-specific Unreal Editor tool.",
     "",
-    'domain:"blueprint" (requires params.blueprint_path)',
-    "  ops: add_variable, add_function, add_component, add_event,",
-    "  set_parent, compile, get_info, add_node, connect_nodes, set_default,",
-    "  add_interface, implement_interface, add_custom_event, add_local_variable,",
-    "  get_nodes, remove_node, remove_variable, remove_component, disconnect_pin,",
-    "  reroute_node, set_node_param, promote_to_variable, search_nodes, get_function_list",
-    "  Per-op: variable_name/type, function_name, node_type, etc.",
+    'domain:"blueprint"',
+    "  modify ops: create, add_variable, remove_variable, add_function,",
+    "  remove_function, add_node, add_nodes, delete_node, connect_pins,",
+    "  disconnect_pins, set_pin_value",
+    "  query ops: list, inspect, get_graph, get_nodes, get_variables,",
+    "  get_functions, get_node_pins, search_nodes, find_references",
+    "  Modify requires blueprint_path. Query: list uses path_filter/type_filter/name_filter,",
+    "  inspect/get_graph/get_nodes/get_variables/get_functions require blueprint_path.",
+    "  get_node_pins requires blueprint_path + node_id.",
+    "  search_nodes requires blueprint_path + query.",
+    "  find_references requires blueprint_path + ref_name.",
     "",
     'domain:"anim" (requires params.blueprint_path)',
     "  ops: create_state_machine, add_state, create_transition,",

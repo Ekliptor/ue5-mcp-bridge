@@ -137,29 +137,36 @@ if (OutputPin && InputPin)
 
 ## MCP Blueprint Operations
 
-Available via `blueprint_modify` tool:
+All blueprint operations are accessible via `unreal_ue(domain="blueprint", operation="...", params={...})`.
+The router automatically routes to the correct backend tool based on the operation.
 
-| Operation | Description |
-|-----------|-------------|
-| `add_variable` | Add member variable to blueprint |
-| `remove_variable` | Remove member variable |
-| `add_function` | Create new function graph |
-| `remove_function` | Delete function graph |
-| `add_node` | Add node to graph |
-| `remove_node` | Remove node from graph |
-| `connect_pins` | Wire two pins together |
-| `disconnect_pins` | Break pin connection |
-| `set_pin_default` | Set default value on pin |
+### Modify operations (→ `blueprint_modify`)
 
-Available via `blueprint_query` tool:
+Auto-compiles the Blueprint after changes.
 
-| Operation | Description |
-|-----------|-------------|
-| `get_variables` | List all member variables |
-| `get_functions` | List all function graphs |
-| `get_graph_nodes` | Get nodes in a graph |
-| `get_node_pins` | Get pins on a node |
-| `find_references` | Find usages of variable/function |
+| Operation | Description | Key Params |
+|-----------|-------------|------------|
+| `create` | Create a new Blueprint | `package_path`, `blueprint_name`, `parent_class`, `blueprint_type` |
+| `add_variable` | Add member variable | `blueprint_path`, `variable_name`, `variable_type` |
+| `remove_variable` | Remove member variable | `blueprint_path`, `variable_name` |
+| `add_function` | Create new function graph | `blueprint_path`, `function_name` |
+| `remove_function` | Remove function graph | `blueprint_path`, `function_name` |
+| `add_node` | Add a single node to a graph | `blueprint_path`, `node_type`, `node_params`, `pos_x`, `pos_y` |
+| `add_nodes` | Batch add nodes with connections | `blueprint_path`, `nodes[]`, `connections[]` |
+| `delete_node` | Remove a node from a graph | `blueprint_path`, `node_id` |
+| `connect_pins` | Wire two pins together | `blueprint_path`, `source_node_id`, `source_pin`, `target_node_id`, `target_pin` |
+| `disconnect_pins` | Break pin connection | `blueprint_path`, `source_node_id`, `source_pin`, `target_node_id`, `target_pin` |
+| `set_pin_value` | Set default value for input pin | `blueprint_path`, `node_id`, `pin_name`, `pin_value` |
+
+### Query operations (→ `blueprint_query`)
+
+Read-only. Use `list` first to discover Blueprints, then `inspect` or `get_graph` for details.
+
+| Operation | Description | Key Params |
+|-----------|-------------|------------|
+| `list` | Find Blueprints with optional filters | `path_filter`, `type_filter`, `name_filter`, `limit` |
+| `inspect` | Get detailed Blueprint info (variables, functions, parent class) | `blueprint_path`, `include_variables`, `include_functions`, `include_graphs` |
+| `get_graph` | Get graph structure (node count, events, graph names) | `blueprint_path` |
 
 ## Compilation
 

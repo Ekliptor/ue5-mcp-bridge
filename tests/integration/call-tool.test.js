@@ -543,6 +543,90 @@ describe("CallTool — unreal_ue router", () => {
     expect(result.content[0].text).toContain("Blueprint Context");
   });
 
+  it("routes blueprint/inspect to blueprint_query", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/blueprint_query", body: { success: true, message: "Blueprint info for: BP_Test", data: { name: "BP_Test" } } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "inspect",
+      params: { blueprint_path: "/Game/BP_Test", include_variables: true },
+    }, { asyncEnabled: false });
+    expect(result.content[0].text).toContain("Blueprint info");
+    expect(result.isError).toBe(false);
+    const call = spy.mock.calls.find(c => c[0].includes("blueprint_query"));
+    expect(call).toBeDefined();
+    const body = JSON.parse(call[1].body);
+    expect(body.operation).toBe("inspect");
+    expect(body.blueprint_path).toBe("/Game/BP_Test");
+  });
+
+  it("routes blueprint/list to blueprint_query", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/blueprint_query", body: { success: true, message: "Found 5 Blueprints (showing 5)", data: { blueprints: [], count: 5 } } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "list",
+      params: { path_filter: "/Game/", name_filter: "BP_" },
+    }, { asyncEnabled: false });
+    expect(result.content[0].text).toContain("Found 5 Blueprints");
+    expect(result.isError).toBe(false);
+    const modifyCalls = spy.mock.calls.filter(c => c[0].includes("blueprint_modify"));
+    expect(modifyCalls).toHaveLength(0);
+  });
+
+  it("routes blueprint/get_graph to blueprint_query", async () => {
+    installFetchMock([
+      { pattern: "/mcp/tool/blueprint_query", body: { success: true, message: "Graph info for: BP_Test", data: { total_nodes: 12 } } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "get_graph",
+      params: { blueprint_path: "/Game/BP_Test" },
+    }, { asyncEnabled: false });
+    expect(result.content[0].text).toContain("Graph info");
+    expect(result.isError).toBe(false);
+  });
+
+  it("still routes blueprint/add_variable to blueprint_modify", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/blueprint_modify", body: { success: true, message: "Variable added", data: { variable: "Speed" } } },
+    ]);
+    const result = await simulateCallTool("unreal_ue", {
+      domain: "blueprint",
+      operation: "add_variable",
+      params: { blueprint_path: "/Game/BP_Test", variable_name: "Speed", variable_type: "float" },
+    }, { asyncEnabled: false });
+    expect(result.content[0].text).toContain("Variable added");
+    const queryCalls = spy.mock.calls.filter(c => c[0].includes("blueprint_query"));
+    expect(queryCalls).toHaveLength(0);
+  });
+
+  it("character domain routing is unaffected by blueprint changes", async () => {
+    const spy = installFetchMock([
+      { pattern: "/mcp/tool/character_data", body: { success: true, message: "Asset created" } },
+      { pattern: "/mcp/tool/character", body: { success: true, message: "Param set" } },
+    ]);
+    // Data asset op → character_data
+    await simulateCallTool("unreal_ue", {
+      domain: "character",
+      operation: "create_data_asset",
+      params: { asset_name: "Hero" },
+    }, { asyncEnabled: false });
+    const dataCall = spy.mock.calls.find(c => c[0].includes("character_data"));
+    expect(dataCall).toBeDefined();
+
+    // Movement op → character
+    await simulateCallTool("unreal_ue", {
+      domain: "character",
+      operation: "set_movement_param",
+      params: { character_name: "Hero" },
+    }, { asyncEnabled: false });
+    const charCall = spy.mock.calls.find(c => c[0].includes("/mcp/tool/character") && !c[0].includes("character_data"));
+    expect(charCall).toBeDefined();
+  });
+
   it("routes through async path when enabled", async () => {
     const taskId = "router-task-1";
     const spy = installFetchMock([
