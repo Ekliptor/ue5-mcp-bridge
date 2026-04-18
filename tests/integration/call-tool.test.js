@@ -735,4 +735,52 @@ describe("formatToolResponse", () => {
     expect(response.content[1].type).toBe("text");
     expect(response.content[1].text).not.toContain("Some Context");
   });
+
+  it("surfaces warnings array in text output", () => {
+    const result = {
+      success: true,
+      message: "Found 5 assets",
+      data: { count: 5 },
+      warnings: [
+        "Parameter 'asset_type' is not recognized — use 'class_filter' instead.",
+        "Unknown parameter 'foo' was ignored.",
+      ],
+    };
+    const response = formatToolResponse("asset_search", result, null);
+    expect(response.isError).toBe(false);
+    expect(response.content[0].text).toContain("Warnings:");
+    expect(response.content[0].text).toContain("asset_type");
+    expect(response.content[0].text).toContain("class_filter");
+    expect(response.content[0].text).toContain("Unknown parameter 'foo'");
+  });
+
+  it("does not emit warnings block when warnings array is empty", () => {
+    const result = {
+      success: true,
+      message: "OK",
+      data: {},
+      warnings: [],
+    };
+    const response = formatToolResponse("asset_search", result, null);
+    expect(response.content[0].text).not.toContain("Warnings:");
+  });
+
+  it("does not emit warnings block when warnings field is missing", () => {
+    const result = { success: true, message: "OK", data: {} };
+    const response = formatToolResponse("asset_search", result, null);
+    expect(response.content[0].text).not.toContain("Warnings:");
+  });
+
+  it("surfaces warnings for capture_viewport response too", () => {
+    const result = {
+      success: true,
+      message: "Captured",
+      data: { image_base64: "abc", format: "png" },
+      warnings: ["Parameter 'foo' was ignored."],
+    };
+    const response = formatToolResponse("capture_viewport", result, null);
+    expect(response.content[1].type).toBe("text");
+    expect(response.content[1].text).toContain("Warnings:");
+    expect(response.content[1].text).toContain("Parameter 'foo'");
+  });
 });

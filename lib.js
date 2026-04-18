@@ -283,6 +283,11 @@ export function formatToolResponse(toolName, result, getContext) {
     };
   }
 
+  const warningsBlock =
+    Array.isArray(result.warnings) && result.warnings.length > 0
+      ? "\n\nWarnings:\n" + result.warnings.map((w) => `- ${w}`).join("\n")
+      : "";
+
   const content = [];
 
   if (toolName === "capture_viewport" && result.data?.image_base64) {
@@ -294,9 +299,9 @@ export function formatToolResponse(toolName, result, getContext) {
     // Include metadata without the huge base64 string
     const meta = { ...result.data };
     delete meta.image_base64;
-    content.push({ type: "text", text: result.message + "\n\n" + JSON.stringify(meta) });
+    content.push({ type: "text", text: result.message + "\n\n" + JSON.stringify(meta) + warningsBlock });
   } else {
-    let text = result.message + (result.data ? "\n\n" + JSON.stringify(result.data) : "");
+    let text = result.message + (result.data ? "\n\n" + JSON.stringify(result.data) : "") + warningsBlock;
     if (getContext) {
       const ctx = getContext(toolName);
       if (ctx) {
