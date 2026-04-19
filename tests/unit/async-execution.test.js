@@ -427,4 +427,114 @@ describe("executeUnrealToolAsync", () => {
     expect(body.params).toEqual({ query: "BP_*", path: "/Game" });
     expect(body.timeout_ms).toBe(60000);
   });
+
+  it("backs off exponentially between polls, clamped to ceiling", async () => {
+    // Require several polls before completing, and record the wall-clock gap
+    // between consecutive /task_status calls to confirm growth + saturation.
+    let statusCalls = 0;
+    const statusTimestamps = [];
+    const spy = vi.fn(async (url) => {
+      if (url.includes("/task_submit")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { task_id: "backoff-task" } }),
+        };
+      }
+      if (url.includes("/task_status")) {
+        statusTimestamps.push(Date.now());
+        statusCalls++;
+        const status = statusCalls >= 6 ? "completed" : "running";
+        return {
+          ok: true,
+          json: async () => ({ data: { status, progress: statusCalls, total: 6 } }),
+        };
+      }
+      if (url.includes("/task_result")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, message: "done", data: {} }),
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", spy);
+
+    const result = await executeUnrealToolAsync(
+      BASE_URL, TIMEOUT_MS, "slow_tool", {},
+      {
+        pollIntervalMinMs: 20,
+        pollIntervalMs: 100,
+        pollBackoffFactor: 2,
+        asyncTimeoutMs: 5000,
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(statusTimestamps.length).toBe(6);
+
+    // Intervals between successive status polls. Expected schedule (ms):
+    // 20, 40, 80, 100, 100, 100 — first three should grow, then saturate.
+    const gaps = [];
+    for (let i = 1; i < statusTimestamps.length; i++) {
+      gaps.push(statusTimestamps[i] - statusTimestamps[i - 1]);
+    }
+
+    // Growth: gap 2 > gap 1, gap 3 > gap 2 (loose bound for scheduler jitter).
+    expect(gaps[1]).toBeGreaterThan(gaps[0]);
+    expect(gaps[2]).toBeGreaterThan(gaps[1]);
+
+    // Saturation: every gap after the ceiling is hit must not exceed it
+    // (plus a generous jitter margin for slow CI runners).
+    for (const gap of gaps.slice(3)) {
+      expect(gap).toBeLessThanOrEqual(250);
+    }
+  });
+
+  it("respects pollIntervalMs as hard ceiling when min >= ceiling (back-compat)", async () => {
+    // Callers passing only a low pollIntervalMs (like tests) must keep the
+    // classic constant-interval behavior even though the new min default is 100.
+    let statusCalls = 0;
+    const statusTimestamps = [];
+    const spy = vi.fn(async (url) => {
+      if (url.includes("/task_submit")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: { task_id: "clamp-task" } }),
+        };
+      }
+      if (url.includes("/task_status")) {
+        statusTimestamps.push(Date.now());
+        statusCalls++;
+        const status = statusCalls >= 4 ? "completed" : "running";
+        return {
+          ok: true,
+          json: async () => ({ data: { status } }),
+        };
+      }
+      if (url.includes("/task_result")) {
+        return {
+          ok: true,
+          json: async () => ({ success: true, data: {} }),
+        };
+      }
+      return { ok: false, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", spy);
+
+    // pollIntervalMs: 10 is below default pollIntervalMinMs (100), so
+    // effectiveMin should clamp down to 10 and every sleep should be ~10ms.
+    await executeUnrealToolAsync(
+      BASE_URL, TIMEOUT_MS, "clamp_tool", {},
+      { pollIntervalMs: 10, asyncTimeoutMs: 5000 }
+    );
+
+    expect(statusTimestamps.length).toBe(4);
+    const gaps = [];
+    for (let i = 1; i < statusTimestamps.length; i++) {
+      gaps.push(statusTimestamps[i] - statusTimestamps[i - 1]);
+    }
+    for (const gap of gaps) {
+      expect(gap).toBeLessThan(80); // generous bound; real sleep is ~10ms
+    }
+  });
 });

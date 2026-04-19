@@ -149,6 +149,8 @@ Once connected, you can interact with Unreal Editor through natural language:
 | `unreal_cleanup_scripts` | Remove generated scripts |
 | `unreal_get_script_history` | Get script execution history |
 
+By default, each `unreal_execute_script` call pops a modal permission dialog in the Unreal Editor asking you to approve the script. To skip the dialog for trusted workflows, toggle the per-type auto-approve flags in **Editor Preferences > Plugins > UnrealClaude > Script Execution**, or tick the "Remember this choice" checkbox in the dialog itself when you click Allow or Deny. The dialog and the preferences panel write to the same settings.
+
 ### Viewport
 
 | Tool | Description |
@@ -310,7 +312,12 @@ Enable automatic context injection by setting:
 | `UNREAL_MCP_URL` | `http://localhost:3000` | Unreal plugin HTTP server URL |
 | `MCP_REQUEST_TIMEOUT_MS` | `30000` | Request timeout in milliseconds |
 | `INJECT_CONTEXT` | `false` | Auto-inject UE5 context on tool responses |
+| `MCP_POLL_INTERVAL_MIN_MS` | `100` | First poll interval (floor) for async tasks |
+| `MCP_POLL_INTERVAL_MS` | `2000` | Poll interval ceiling for async tasks |
+| `MCP_POLL_BACKOFF_FACTOR` | `1.5` | Multiplier per poll until ceiling is reached |
 | `DEBUG` | - | Enable debug logging |
+
+**Async polling.** Long-running tools (e.g. `unreal_execute_script`) run via Unreal's task queue and the bridge polls `task_status` until completion. The poll interval starts at `MCP_POLL_INTERVAL_MIN_MS` and grows by `MCP_POLL_BACKOFF_FACTOR` each iteration up to `MCP_POLL_INTERVAL_MS`. Short scripts return ~`MIN` ms after completion instead of ~`MS` ms; long scripts saturate at the ceiling within a few polls and behave as before. Lower the min for even snappier short-script latency; raise the ceiling if you want lighter polling during very long tasks.
 
 ---
 

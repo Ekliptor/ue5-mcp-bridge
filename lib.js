@@ -165,19 +165,28 @@ export function sleep(ms) {
  * Execute a tool via Unreal's async task queue (task_submit → poll task_status → task_result).
  * Falls back to synchronous executeUnrealTool() if task_submit fails.
  *
+ * Poll schedule: starts at pollIntervalMinMs and grows by pollBackoffFactor each
+ * iteration, clamped to pollIntervalMs. If pollIntervalMinMs >= pollIntervalMs the
+ * effective minimum is clamped down to pollIntervalMs, so callers that pass a very
+ * low ceiling (e.g. tests with pollIntervalMs: 10) get a constant-interval loop.
+ *
  * @param {string} baseUrl - Unreal MCP server base URL
  * @param {number} timeoutMs - per-request HTTP timeout in milliseconds
  * @param {string} toolName - name of the tool to execute
  * @param {object} args - tool arguments
  * @param {object} [options]
  * @param {function} [options.onProgress] - callback({progress, total, message})
- * @param {number}   [options.pollIntervalMs=2000] - poll interval
+ * @param {number}   [options.pollIntervalMs=2000] - poll interval ceiling
+ * @param {number}   [options.pollIntervalMinMs=100] - first-poll interval / lower bound
+ * @param {number}   [options.pollBackoffFactor=1.5] - multiplier applied each poll until ceiling
  * @param {number}   [options.asyncTimeoutMs=300000] - overall async timeout (5 min)
  */
 export async function executeUnrealToolAsync(baseUrl, timeoutMs, toolName, args, options = {}) {
   const {
     onProgress,
     pollIntervalMs = 2000,
+    pollIntervalMinMs = 100,
+    pollBackoffFactor = 1.5,
     asyncTimeoutMs = 300000,
   } = options;
 
@@ -206,13 +215,19 @@ export async function executeUnrealToolAsync(baseUrl, timeoutMs, toolName, args,
     return executeUnrealTool(baseUrl, timeoutMs, toolName, args);
   }
 
-  // Step 2: Poll for completion
+  // Step 2: Poll for completion with exponential backoff
   const deadline = Date.now() + asyncTimeoutMs;
+  const effectiveMin = Math.min(pollIntervalMinMs, pollIntervalMs);
+  let currentInterval = effectiveMin;
   let pollCount = 0;
 
   while (Date.now() < deadline) {
-    await sleep(pollIntervalMs);
+    await sleep(currentInterval);
     pollCount++;
+    currentInterval = Math.min(
+      pollIntervalMs,
+      Math.max(effectiveMin, currentInterval * pollBackoffFactor)
+    );
 
     let statusData;
     try {

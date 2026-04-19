@@ -11,6 +11,9 @@
  *   MCP_REQUEST_TIMEOUT_MS - HTTP request timeout in milliseconds (default: 30000)
  *   INJECT_CONTEXT - Enable automatic context injection on tool calls (default: false)
  *   MCP_TOOL_CACHE_TTL_MS - TTL for tool list cache in milliseconds (default: 30000)
+ *   MCP_POLL_INTERVAL_MS - Async poll interval ceiling in ms (default: 2000)
+ *   MCP_POLL_INTERVAL_MIN_MS - Async poll interval floor / first poll in ms (default: 100)
+ *   MCP_POLL_BACKOFF_FACTOR - Multiplier applied per poll until ceiling (default: 1.5)
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -57,6 +60,8 @@ const CONFIG = {
   asyncEnabled: process.env.MCP_ASYNC_ENABLED !== "false",
   asyncTimeoutMs: parseInt(process.env.MCP_ASYNC_TIMEOUT_MS, 10) || 300000,
   pollIntervalMs: parseInt(process.env.MCP_POLL_INTERVAL_MS, 10) || 2000,
+  pollIntervalMinMs: parseInt(process.env.MCP_POLL_INTERVAL_MIN_MS, 10) || 100,
+  pollBackoffFactor: parseFloat(process.env.MCP_POLL_BACKOFF_FACTOR) || 1.5,
   toolCacheTtlMs: parseInt(process.env.MCP_TOOL_CACHE_TTL_MS, 10) || 30000,
 };
 
@@ -389,6 +394,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       {
         onProgress,
         pollIntervalMs: CONFIG.pollIntervalMs,
+        pollIntervalMinMs: CONFIG.pollIntervalMinMs,
+        pollBackoffFactor: CONFIG.pollBackoffFactor,
         asyncTimeoutMs: CONFIG.asyncTimeoutMs,
       }
     );
@@ -419,6 +426,8 @@ async function main() {
     asyncEnabled: CONFIG.asyncEnabled,
     asyncTimeoutMs: CONFIG.asyncTimeoutMs,
     pollIntervalMs: CONFIG.pollIntervalMs,
+    pollIntervalMinMs: CONFIG.pollIntervalMinMs,
+    pollBackoffFactor: CONFIG.pollBackoffFactor,
     contextInjection: CONFIG.injectContext,
     contextSystem: contextStatus,
     contextCategories: categories,
